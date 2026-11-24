@@ -1,27 +1,32 @@
 name: Bot Aggiornamento Risultati
 
 on:
-  schedule:
-    - cron: '0 7 * * 4'
-  workflow_dispatch:
+schedule:
+# Ogni Giovedì mattina alle 08:00 ora italiana (07:00 UTC)
+- cron: '0 7 * * 4'
+
+Permette di avviarlo manualmente dalla scheda Actions
+
+workflow_dispatch:
 
 jobs:
-  aggiorna-classifica:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Scarica il codice
-        uses: actions/checkout@v4
+aggiorna-classifica:
+runs-on: ubuntu-latest
 
-      - name: Installa Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+steps:
+  - name: Scarica il codice
+    uses: actions/checkout@v4
 
-      - name: Installa dipendenze del Bot
-        run: npm install puppeteer cheerio firebase-admin
+  - name: Installa Node.js
+    uses: actions/setup-node@v4
+    with:
+      node-version: '20'
 
-      - name: Crea file chiavi segrete Firebase
-        run: echo '${{ secrets.FIREBASE_KEY }}' > chiave-segreta-firebase.json
+  - name: Installa dipendenze del Bot
+    run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth cheerio firebase-admin
 
-      - name: Avvia il Bot Risultati
-        run: node bot_risultati.js
+  - name: Crea file chiavi segrete Firebase
+    run: echo '${{ secrets.FIREBASE_KEY }}' > chiave-segreta-firebase.json
+
+  - name: Avvia il Bot Risultati
+    run: node bot_risultati.js
