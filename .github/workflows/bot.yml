@@ -1,29 +1,29 @@
 name: Bot Aggiornamento Risultati
 
 on:
-schedule:
-- cron: '0 7 * * 4'
-workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * 4'
+  workflow_dispatch:
 
 jobs:
-aggiorna-classifica:
-runs-on: ubuntu-latest
-steps:
-- name: Scarica il codice
-uses: actions/checkout@v4
+  aggiorna-classifica:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scarica il codice
+        uses: actions/checkout@v4
 
-  - name: Installa Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: '20'
+      - name: Installa Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-  - name: Installa dipendenze del Bot
-    run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth cheerio firebase-admin
+      - name: Installa dipendenze del Bot
+        run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth cheerio firebase-admin
 
-  - name: Crea file chiavi segrete Firebase
-    env:
-      FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
-    run: printf '%s' "$FIREBASE_KEY" > chiave-segreta-firebase.json
+      - name: Crea file chiavi segrete Firebase
+        env:
+          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+        run: printf '%s' "$FIREBASE_KEY" > chiave-segreta-firebase.json
 
-  - name: Avvia il Bot Risultati
-    run: node bot_risultati.js
+      - name: Avvia il Bot Risultati
+        run: node bot_risultati.js
