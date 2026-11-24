@@ -1,32 +1,27 @@
 name: Bot Aggiornamento Risultati
 
-on:Una volta salvato questo file, vai nella sch
-schedule:
-# Ogni Giovedì mattina alle 08:00 ora italiana (07:00 UTC)
-- cron: '0 7 * * 4'
-
-Permette di avviarlo anche manualmente con un clic dalla scheda Actions
-
-workflow_dispatch:
+on:
+  schedule:
+    - cron: '0 7 * * 4'
+  workflow_dispatch:
 
 jobs:
-aggiorna-classifica:
-runs-on: ubuntu-latest
+  aggiorna-classifica:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scarica il codice
+        uses: actions/checkout@v4
 
-steps:
-  - name: Scarica il codice
-    uses: actions/checkout@v4
+      - name: Installa Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-  - name: Installa Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: '20'
+      - name: Installa dipendenze del Bot
+        run: npm install axios cheerio firebase-admin
 
-  - name: Installa dipendenze del Bot
-    run: npm install axios cheerio firebase-admin
+      - name: Crea file chiavi segrete Firebase
+        run: echo '${{ secrets.FIREBASE_KEY }}' > chiave-segreta-firebase.json
 
-  - name: Crea file chiavi segrete Firebase
-    run: echo '${{ secrets.FIREBASE_KEY }}' > chiave-segreta-firebase.json
-
-  - name: Avvia il Bot Risultati
-    run: node bot_risultati.js
+      - name: Avvia il Bot Risultati
+        run: node bot_risultati.js
