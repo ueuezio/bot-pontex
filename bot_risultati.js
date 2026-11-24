@@ -1,10 +1,10 @@
 /**
- * PONTEX BULLS - BOT AUTOMATICO CALCIO LIGURIA
- * Legge la classifica e gli ultimi risultati da calcioliguria.com
- * e aggiorna in automatico il database Firebase.
+ * PONTEX BULLS - BOT AUTOMATICO CALCIO LIGURIA (CON BROWSER REALE)
+ * Usa Puppeteer per superare i blocchi anti-bot (Errore 403), legge
+ * classifica e risultati da calcioliguria.com e aggiorna Firebase.
  */
 
-const axios = require('axios');
+const puppeteer = require('puppeteer');
 const cheerio = require('cheerio');
 const admin = require('firebase-admin');
 
@@ -16,34 +16,41 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-// Funzione per normalizzare i nomi delle squadre e ignorare errori di battitura sul portale (es. ARCHITTTURA)
 function normalizeName(str) {
     return str
         .toLowerCase()
-        .replace(/^(fci|boc|alm|val|tou|row|mam|pon)\s+/i, '') // Rimuove la sigla iniziale a 3 lettere
+        .replace(/^(fci|boc|alm|val|tou|row|mam|pon)\s+/i, '')
         .replace(/[^a-z0-9]/g, '')
         .replace(/ttt/g, 'tt');
 }
 
 async function aggiornaTutto() {
-    console.log("🤖 Avvio Bot Pontex Bulls su Calcio Liguria...");
+    console.log("🤖 Avvio Bot Pontex Bulls su Calcio Liguria con browser Chrome...");
+    let browser;
 
     try {
         const urlCalcioLiguria = 'https://www.calcioliguria.com/campionati.html?p=1277&func=showResultsRank';
         
-        console.log(`📡 Scarico dati da: ${urlCalcioLiguria}`);
-        const response = await axios.get(urlCalcioLiguria, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        await page.setExtraHTTPHeaders({ 'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8' });
+
+        console.log(`📡 Apro pagina: ${urlCalcioLiguria}`);
+        await page.goto(urlCalcioLiguria, { waitUntil: 'networkidle2', timeout: 45000 });
         
-        const $ = cheerio.load(response.data);
+        const htmlContent = await page.content();
+        await browser.close();
+        browser = null;
+
+        const $ = cheerio.load(htmlContent);
         const squadreLette = [];
         const risultatiLetti = [];
 
         // 2. LETTURA TABELLA CLASSIFICA
-        // Struttura Calcio Liguria: Pos. | Squadra | P.ti | G | V | N | P | Reti (GF:GS) | Diff.
         $('table tr').each((index, element) => {
             const cols = $(element).find('td');
             
@@ -51,7 +58,6 @@ async function aggiornaTutto() {
                 const posText = $(cols[0]).text().trim();
                 const retiText = $(cols[7]).text().trim();
 
-                // Verifica che sia una riga della classifica (Posizione numerica e Reti con ":")
                 if (/^\d+$/.test(posText) && retiText.includes(':')) {
                     const nomeGrezzo = $(cols[1]).text().trim().replace(/\s+/g, ' ');
                     const punti = parseInt($(cols[2]).text().trim()) || 0;
@@ -73,11 +79,10 @@ async function aggiornaTutto() {
                 }
             }
 
-            // 3. LETTURA TABELLA RISULTATI DELL'ULTIMA GIORNATA
+            // 3. LETTURA TABELLA RISULTATI
             const rowText = $(element).text().replace(/\s+/g, ' ').trim();
             const scoreMatch = rowText.match(/(\d+)\s*-\s*(\d+)/);
             if (scoreMatch && cols.length >= 4 && !rowText.includes(':')) {
-                // Estrae i nomi delle squadre prima e dopo il punteggio
                 const parts = rowText.split(scoreMatch[0]);
                 if (parts.length === 2) {
                     const casaGrezzo = parts[0].replace(/^\d{2}:\d{2}\s*/, '').trim();
@@ -96,6 +101,10 @@ async function aggiornaTutto() {
         });
 
         console.log(`✅ Lette ${squadreLette.length} squadre in classifica e ${risultatiLetti.length} risultati.`);
+
+        if (squadreLette.length === 0) {
+            throw new Error("Nessuna squadra trovata nella pagina (possibile blocco firewall del sito).");
+        }
 
         // 4. AGGIORNAMENTO CLASSIFICA SU FIREBASE
         const basePath = db.collection('artifacts').doc('pontex').collection('public').doc('data');
@@ -123,7 +132,7 @@ async function aggiornaTutto() {
             }
         }
 
-        // 5. AGGIORNAMENTO RISULTATO PARTITA NEL CALENDARIO SU FIREBASE
+        // 5. AGGIORNAMENTO CALENDARIO SU FIREBASE
         if (risultatiLetti.length > 0) {
             const calendarSnap = await basePath.collection('calendar').get();
             for (const docSnap of calendarSnap.docs) {
@@ -150,6 +159,7 @@ async function aggiornaTutto() {
         console.log("🏁 Sincronizzazione con Calcio Liguria completata!");
 
     } catch (error) {
+        if (browser) await browser.close();
         console.error("❌ Errore durante l'esecuzione del bot:", error.message);
         process.exit(1);
     }
