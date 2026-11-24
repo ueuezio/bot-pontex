@@ -1,7 +1,7 @@
 /**
- * PONTEX BULLS - BOT AUTOMATICO CALCIO LIGURIA (CON BROWSER REALE)
- * Usa Puppeteer per superare i blocchi anti-bot (Errore 403), legge
- * classifica e risultati da calcioliguria.com e aggiorna Firebase.
+ * PONTEX BULLS - BOT AUTOMATICO CALCIO LIGURIA
+ * Legge classifica e risultati da calcioliguria.com e aggiorna Firebase.
+ */
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
@@ -16,21 +16,89 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
+// Pulisce i nomi delle squadre (toglie sigle iniziali, accenti e spazi)
 function normalizeName(str) {
     return str
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
         .toLowerCase()
         .replace(/^(fci|boc|alm|val|tou|row|mam|pon)\s+/i, '')
         .replace(/[^a-z0-9]/g, '')
         .replace(/ttt/g, 'tt');
 }
 
+// Estrae classifica e risultati dall'HTML scaricato
+function estraiDatiDaHtml(htmlContent) {
+    const $ = cheerio.load(htmlContent);
+    const squadreLette = [];
+    const risultatiLetti = [];
+
+    $('table tr').each((index, element) => {
+        const cols = $(element).find('td');
+
+        // Lettura riga Classifica (Pos, Squadra, Pt, G, V, N, P, Reti, Diff)
+        if (cols.length >= 8) {
+            const posText = $(cols[0]).text().trim();
+            const retiText = $(cols[7]).text().trim();
+
+            if (/^\d+$/.test(posText) && (retiText.includes(':') || retiText.includes('-'))) {
+                const nomeGrezzo = $(cols[1]).text().trim().replace(/\s+/g, ' ');
+                const punti = parseInt($(cols[2]).text().trim()) || 0;
+                const giocate = parseInt($(cols[3]).text().trim()) || 0;
+                const vinte = parseInt($(cols[4]).text().trim()) || 0;
+                const pareggiate = parseInt($(cols[5]).text().trim()) || 0;
+                const perse = parseInt($(cols[6]).text().trim()) || 0;
+
+                const separatore = retiText.includes(':') ? ':' : '-';
+                const [gfStr, gsStr] = retiText.split(separatore);
+                const golFatti = parseInt(gfStr) || 0;
+                const golSubiti = parseInt(gsStr) || 0;
+
+                squadreLette.push({
+                    rawName: nomeGrezzo,
+                    normName: normalizeName(nomeGrezzo),
+                    pt: punti,
+                    g: giocate,
+                    v: vinte,
+                    n: pareggiate,
+                    p: perse,
+                    gf: golFatti,
+                    gs: golSubiti
+                });
+            }
+        }
+
+        // Lettura riga Risultati partita
+        const rowText = $(element).text().replace(/\s+/g, ' ').trim();
+        const scoreMatch = rowText.match(/(\d+)\s*-\s*(\d+)/);
+        if (scoreMatch && cols.length >= 4 && !rowText.includes(':')) {
+            const parts = rowText.split(scoreMatch[0]);
+            if (parts.length === 2) {
+                const casaGrezzo = parts[0].replace(/^\d\d:\d\d\s*/, '').trim();
+                const ospiteGrezzo = parts[1].replace(/Guarda il tabellino.*/i, '').trim();
+
+                if (casaGrezzo && ospiteGrezzo) {
+                    risultatiLetti.push({
+                        casaNorm: normalizeName(casaGrezzo),
+                        ospiteNorm: normalizeName(ospiteGrezzo),
+                        golCasa: parseInt(scoreMatch[1]),
+                        golOspite: parseInt(scoreMatch[2])
+                    });
+                }
+            }
+        }
+    });
+
+    return { squadreLette, risultatiLetti };
+}
+
 async function aggiornaTutto() {
-    console.log("🤖 Avvio Bot Pontex Bulls su Calcio Liguria con browser Chrome...");
+    console.log("🤖 Avvio Bot Pontex Bulls su Calcio Liguria...");
     let browser;
 
     try {
         const urlCalcioLiguria = 'https://www.calcioliguria.com/campionati.html?p=1277&func=showResultsRank';
-        
+
         browser = await puppeteer.launch({
             headless: "new",
             args: [
@@ -40,85 +108,46 @@ async function aggiornaTutto() {
                 '--window-size=1920,1080'
             ]
         });
+
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-        console.log(`📡 Apro pagina: ${urlCalcioLiguria}`);
+        // Tentativo 1: Apertura diretta
+        console.log(`📡 Tentativo 1 (diretto): ${urlCalcioLiguria}`);
         await page.goto(urlCalcioLiguria, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await new Promise(r => setTimeout(r, 6000)); // Attende eventuali controlli anti-bot
-        
+        await new Promise(r => setTimeout(r, 5000));
         let htmlContent = await page.content();
-        
-        // Piano B: se il firewall blocca l'IP di GitHub, passa tramite proxy pubblico
-        if (!htmlContent.includes('PONTEX BULLS') && !htmlContent.includes('Classifica')) {
-            console.log("⚠️ Protezione rilevata, tento il passaggio tramite proxy...");
-            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(urlCalcioLiguria)}`;
-            await page.goto(proxyUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+        let dati = estraiDatiDaHtml(htmlContent);
+
+        // Tentativo 2: Proxy AllOrigins se il server blocca l'IP estero di GitHub
+        if (dati.squadreLette.length === 0) {
+            console.log("⚠️ Tentativo 2 tramite proxy AllOrigins...");
+            const proxy1 = `https://api.allorigins.win/raw?url=${encodeURIComponent(urlCalcioLiguria)}`;
+            await page.goto(proxy1, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await new Promise(r => setTimeout(r, 4000));
             htmlContent = await page.content();
+            dati = estraiDatiDaHtml(htmlContent);
+        }
+
+        // Tentativo 3: Proxy CodeTabs
+        if (dati.squadreLette.length === 0) {
+            console.log("⚠️ Tentativo 3 tramite proxy CodeTabs...");
+            const proxy2 = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(urlCalcioLiguria)}`;
+            await page.goto(proxy2, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await new Promise(r => setTimeout(r, 4000));
+            htmlContent = await page.content();
+            dati = estraiDatiDaHtml(htmlContent);
         }
 
         await browser.close();
         browser = null;
 
-        const $ = cheerio.load(htmlContent);
-        const squadreLette = [];
-        const risultatiLetti = [];
-
-        // 2. LETTURA TABELLA CLASSIFICA
-        $('table tr').each((index, element) => {
-            const cols = $(element).find('td');
-            
-            if (cols.length >= 8) {
-                const posText = $(cols[0]).text().trim();
-                const retiText = $(cols[7]).text().trim();
-
-                if (/^\d+$/.test(posText) && retiText.includes(':')) {
-                    const nomeGrezzo = $(cols[1]).text().trim().replace(/\s+/g, ' ');
-                    const punti = parseInt($(cols[2]).text().trim()) || 0;
-                    const giocate = parseInt($(cols[3]).text().trim()) || 0;
-                    const vinte = parseInt($(cols[4]).text().trim()) || 0;
-                    const pareggiate = parseInt($(cols[5]).text().trim()) || 0;
-                    const perse = parseInt($(cols[6]).text().trim()) || 0;
-                    
-                    const [gfStr, gsStr] = retiText.split(':');
-                    const golFatti = parseInt(gfStr) || 0;
-                    const golSubiti = parseInt(gsStr) || 0;
-
-                    squadreLette.push({
-                        rawName: nomeGrezzo,
-                        normName: normalizeName(nomeGrezzo),
-                        pt: punti, g: giocate, v: vinte, n: pareggiate, p: perse,
-                        gf: golFatti, gs: golSubiti
-                    });
-                }
-            }
-
-            // 3. LETTURA TABELLA RISULTATI
-            const rowText = $(element).text().replace(/\s+/g, ' ').trim();
-            const scoreMatch = rowText.match(/(\d+)\s*-\s*(\d+)/);
-            if (scoreMatch && cols.length >= 4 && !rowText.includes(':')) {
-                const parts = rowText.split(scoreMatch[0]);
-                if (parts.length === 2) {
-                    const casaGrezzo = parts[0].replace(/^\d{2}:\d{2}\s*/, '').trim();
-                    const ospiteGrezzo = parts[1].replace(/Guarda il tabellino.*/i, '').trim();
-                    
-                    if (casaGrezzo && ospiteGrezzo) {
-                        risultatiLetti.push({
-                            casaNorm: normalizeName(casaGrezzo),
-                            ospiteNorm: normalizeName(ospiteGrezzo),
-                            golCasa: parseInt(scoreMatch[1]),
-                            golOspite: parseInt(scoreMatch[2])
-                        });
-                    }
-                }
-            }
-        });
-
+        const { squadreLette, risultatiLetti } = dati;
         console.log(`✅ Lette ${squadreLette.length} squadre in classifica e ${risultatiLetti.length} risultati.`);
 
         if (squadreLette.length === 0) {
-            throw new Error("Nessuna squadra trovata nella pagina (possibile blocco firewall del sito).");
+            throw new Error("Nessuna squadra trovata nella pagina (blocco firewall attivo).");
         }
 
         // 4. AGGIORNAMENTO CLASSIFICA SU FIREBASE
@@ -129,7 +158,7 @@ async function aggiornaTutto() {
             const dbTeam = docSnap.data();
             const dbNorm = normalizeName(dbTeam.name);
 
-            const matchTeam = squadreLette.find(s => 
+            const matchTeam = squadreLette.find(s =>
                 s.normName.includes(dbNorm) || dbNorm.includes(s.normName)
             );
 
@@ -155,7 +184,7 @@ async function aggiornaTutto() {
                 const cCasa = normalizeName(calMatch.casa);
                 const cOspite = normalizeName(calMatch.ospite);
 
-                const foundRes = risultatiLetti.find(r => 
+                const foundRes = risultatiLetti.find(r =>
                     (r.casaNorm.includes(cCasa) || cCasa.includes(r.casaNorm)) &&
                     (r.ospiteNorm.includes(cOspite) || cOspite.includes(r.ospiteNorm))
                 );
