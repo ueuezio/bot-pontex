@@ -2,9 +2,9 @@
  * PONTEX BULLS - BOT AUTOMATICO CALCIO LIGURIA (CON BROWSER REALE)
  * Usa Puppeteer per superare i blocchi anti-bot (Errore 403), legge
  * classifica e risultati da calcioliguria.com e aggiorna Firebase.
- */
-
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 const cheerio = require('cheerio');
 const admin = require('firebase-admin');
 
@@ -33,16 +33,31 @@ async function aggiornaTutto() {
         
         browser = await puppeteer.launch({
             headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--window-size=1920,1080'
+            ]
         });
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
-        await page.setExtraHTTPHeaders({ 'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8' });
+        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
         console.log(`📡 Apro pagina: ${urlCalcioLiguria}`);
-        await page.goto(urlCalcioLiguria, { waitUntil: 'networkidle2', timeout: 45000 });
+        await page.goto(urlCalcioLiguria, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await new Promise(r => setTimeout(r, 6000)); // Attende eventuali controlli anti-bot
         
-        const htmlContent = await page.content();
+        let htmlContent = await page.content();
+        
+        // Piano B: se il firewall blocca l'IP di GitHub, passa tramite proxy pubblico
+        if (!htmlContent.includes('PONTEX BULLS') && !htmlContent.includes('Classifica')) {
+            console.log("⚠️ Protezione rilevata, tento il passaggio tramite proxy...");
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(urlCalcioLiguria)}`;
+            await page.goto(proxyUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+            htmlContent = await page.content();
+        }
+
         await browser.close();
         browser = null;
 
